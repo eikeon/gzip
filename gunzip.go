@@ -74,6 +74,8 @@ type Reader struct {
 	flg          byte
 	buf          [512]byte
 	err          error
+	stop         bool
+	hdr          bool
 }
 
 // NewReader creates a new Reader reading the given reader.
@@ -87,6 +89,10 @@ func NewReader(r io.Reader) (*Reader, error) {
 		return nil, err
 	}
 	return z, nil
+}
+
+func (z *Reader) StopAtBoundary(stop bool) {
+	z.stop = stop
 }
 
 // GZIP (RFC 1952) is little-endian, unlike ZLIB (RFC 1950).
@@ -200,6 +206,11 @@ func (z *Reader) Read(p []byte) (n int, err error) {
 	if z.err != nil {
 		return 0, z.err
 	}
+	if z.hdr {
+		if err := z.resetHeader(); err != nil {
+			return 0, err
+		}
+	}
 	if len(p) == 0 {
 		return 0, nil
 	}
@@ -225,15 +236,25 @@ func (z *Reader) Read(p []byte) (n int, err error) {
 	}
 
 	// File is ok; is there another?
-	if err = z.readHeader(false); err != nil {
+	z.hdr = true
+	if z.stop {
+		return 0, io.EOF
+	}
+	return z.Read(p)
+}
+
+func (z *Reader) resetHeader() error {
+	// Is there another header?
+	if err := z.readHeader(z.stop); err != nil {
 		z.err = err
-		return
+		return err
 	}
 
 	// Yes.  Reset and read from it.
 	z.digest.Reset()
 	z.size = 0
-	return z.Read(p)
+	z.hdr = false
+	return nil
 }
 
 // Close closes the Reader. It does not close the underlying io.Reader.
